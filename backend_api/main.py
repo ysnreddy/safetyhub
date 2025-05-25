@@ -1,10 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
 import os
 from dotenv import load_dotenv
+from contextlib import asynccontextmanager
 
 from .database import database, create_db_and_tables
 from .models import cameras as cameras_table, policies as policies_table, model_settings as model_settings_table
@@ -51,8 +52,8 @@ class CameraConfig(BaseModel):
     model_settings_id: str = Field(..., description="ID of the model settings to use for this camera.")
     is_active: bool = Field(True, description="Represents if the camera is generally available for processing (persistent setting). Does not reflect real-time processing status.")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "name": "Entrance Camera",
                 "url": "rtsp://example.com/stream1",
@@ -62,6 +63,7 @@ class CameraConfig(BaseModel):
                 "is_active": True,
             }
         }
+    )
 
 class Policy(BaseModel):
     id: Optional[str] = Field(None, description="Unique identifier for the policy (auto-generated on creation).")
@@ -69,14 +71,15 @@ class Policy(BaseModel):
     policy_type: str = Field(..., description="Type of policy (e.g., 'intrusion_detection', 'loitering_detection').")
     parameters: Dict[str, Any] = Field(..., description="Dictionary of parameters specific to the policy type.")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "name": "Standard Intrusion Policy",
                 "policy_type": "intrusion_detection",
                 "parameters": {"sensitivity": "high", "detection_zones": [{"x":0,"y":0,"w":100,"h":100}]},
             }
         }
+    )
 
 class ModelSettings(BaseModel):
     id: Optional[str] = Field(None, description="Unique identifier for the model settings (auto-generated on creation).")
@@ -86,8 +89,8 @@ class ModelSettings(BaseModel):
     iou_threshold: float = Field(..., description="Intersection over Union (IoU) threshold for non-maximum suppression (0.0 to 1.0).")
     other_params: Optional[Dict[str, Any]] = Field(None, description="Optional dictionary for other model-specific parameters.")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra = {
             "example": {
                 "name": "Default YOLOv8 Settings",
                 "model_path": "/models/yolov8m.pt",
@@ -96,20 +99,34 @@ class ModelSettings(BaseModel):
                 "other_params": {"resolution": "1280x720"}
             }
         }
+    )
 
 # In-memory set for active processing tasks
 # TODO: This could be moved to the database for full persistence if needed,
 # especially if the application might be scaled or needs to recover this state after a restart.
 active_processing_tasks: set[str] = set()
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app_lifespan: FastAPI): # Renamed 'app' to 'app_lifespan' to avoid conflict with global 'app'
+    # Startup
+    print("Connecting to database...")
     await database.connect()
-    create_db_and_tables()
-
-@app.on_event("shutdown")
-async def shutdown():
+    print("Creating database tables...")
+    create_db_and_tables() # This is a synchronous call, run once
+    print("Database connected and tables created.")
+    yield
+    # Shutdown
+    print("Disconnecting from database...")
     await database.disconnect()
+    print("Database disconnected.")
+
+app = FastAPI(
+    title="Video Analytics Backend API",
+    version="1.0.0",
+    description="API for managing video analytics configurations (cameras, policies, models) and controlling video processing tasks. Most endpoints require an API key passed in the `X-API-Key` header.",
+    dependencies=[Depends(get_api_key)], # Apply to all routes by default
+    lifespan=lifespan # Use the new lifespan context manager
+)
 
 # Public Endpoints (No API Key Required)
 # To make these public, we define them on a router that doesn't have the global dependency,
@@ -156,7 +173,7 @@ async def create_policy(policy: Policy):
         parameters=policy.parameters,
     )
     await database.execute(query)
-    return {**policy.dict(), "id": new_id}
+    return {**policy.model_dump(), "id": new_id}
 
 @app.get("/configs/policies",
     response_model=List[Policy],
@@ -193,7 +210,7 @@ async def update_policy(policy_id: str, policy_update: Policy):
     if db_policy is None:
         raise HTTPException(status_code=404, detail="Policy not found")
 
-    update_data = policy_update.dict(exclude_unset=True)
+    update_data = policy_update.model_dump(exclude_unset=True)
     if "id" in update_data and update_data["id"] != policy_id:
          raise HTTPException(status_code=400, detail="Policy ID in path does not match ID in body if provided")
     update_data.pop("id", None)
@@ -204,7 +221,10 @@ async def update_policy(policy_id: str, policy_update: Policy):
         .values(**update_data)
     )
     await database.execute(query_update)
-    return {**policy_update.dict(), "id": policy_id} # Return full model
+    updated_db_policy = await database.fetch_one(policies_table.select().where(policies_table.c.id == policy_id))
+    if updated_db_policy is None: # Should not happen if update succeeded and ID is correct
+        raise HTTPException(status_code=404, detail="Policy not found after update attempt.")
+    return Policy(**updated_db_policy)
 
 
 @app.delete("/configs/policies/{policy_id}",
@@ -242,7 +262,7 @@ async def create_model_settings(settings: ModelSettings):
         other_params=settings.other_params,
     )
     await database.execute(query)
-    return {**settings.dict(), "id": new_id}
+    return {**settings.model_dump(), "id": new_id}
 
 @app.get("/configs/model_settings",
     response_model=List[ModelSettings],
@@ -279,7 +299,7 @@ async def update_model_settings(model_settings_id: str, settings_update: ModelSe
     if db_settings is None:
         raise HTTPException(status_code=404, detail="ModelSettings not found")
 
-    update_data = settings_update.dict(exclude_unset=True)
+    update_data = settings_update.model_dump(exclude_unset=True)
     if "id" in update_data and update_data["id"] != model_settings_id:
         raise HTTPException(status_code=400, detail="ModelSettings ID in path does not match ID in body")
     update_data.pop("id", None)
@@ -290,7 +310,10 @@ async def update_model_settings(model_settings_id: str, settings_update: ModelSe
         .values(**update_data)
     )
     await database.execute(query_update)
-    return {**settings_update.dict(), "id": model_settings_id} # Return full model
+    updated_db_settings = await database.fetch_one(model_settings_table.select().where(model_settings_table.c.id == model_settings_id))
+    if updated_db_settings is None:  # Should not happen
+        raise HTTPException(status_code=404, detail="ModelSettings not found after update attempt.")
+    return ModelSettings(**updated_db_settings)
 
 @app.delete("/configs/model_settings/{model_settings_id}",
     status_code=200, # Or 204
@@ -336,7 +359,7 @@ async def create_camera_config(camera: CameraConfig):
         is_active=camera.is_active,
     )
     await database.execute(query)
-    return {**camera.dict(), "id": new_id}
+    return {**camera.model_dump(), "id": new_id}
 
 @app.get("/configs/cameras",
     response_model=List[CameraConfig],
@@ -373,7 +396,7 @@ async def update_camera_config(camera_id: str, camera_update: CameraConfig):
     if db_camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
 
-    update_data = camera_update.dict(exclude_unset=True)
+    update_data = camera_update.model_dump(exclude_unset=True)
     if "id" in update_data and update_data["id"] != camera_id:
         raise HTTPException(status_code=400, detail="Camera ID in path does not match ID in body")
     update_data.pop("id", None)
@@ -393,7 +416,10 @@ async def update_camera_config(camera_id: str, camera_update: CameraConfig):
         .values(**update_data)
     )
     await database.execute(query_update)
-    return {**camera_update.dict(), "id": camera_id} # Return full model
+    updated_db_camera = await database.fetch_one(cameras_table.select().where(cameras_table.c.id == camera_id))
+    if updated_db_camera is None: # Should not happen
+        raise HTTPException(status_code=404, detail="Camera not found after update attempt.")
+    return CameraConfig(**updated_db_camera)
 
 @app.delete("/configs/cameras/{camera_id}",
     status_code=200, # Or 204

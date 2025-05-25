@@ -8,6 +8,7 @@ WORKDIR /app
 COPY ./backend_api/ /app/
 
 # Install any needed packages specified in requirements.txt
+# This will now also install pytest, pytest-asyncio, and httpx
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Set default API port

@@ -4,3 +4,6 @@ pydantic
 SQLAlchemy
 databases[aiosqlite]
 python-dotenv
+pytest
+pytest-asyncio
+httpx
