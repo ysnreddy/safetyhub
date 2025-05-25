@@ -181,6 +181,15 @@ Securade.ai is a tech4good venture and the commercial license allows you to depl
   </table>
 </div>
 
+## Documentation
+
+Detailed documentation for this project can be found in the `/docs` directory:
+
+*   [**Comprehensive API Guide**](./docs/COMPREHENSIVE_API_GUIDE.md): Detailed information about the backend API, including authentication, configuration, endpoints, and data models.
+*   [**Deployment Strategies**](./docs/DEPLOYMENT_STRATEGIES.md): Guidance on deploying the backend API in various environments (local, edge, cloud), including hardware/software requirements and constraints.
+*   [**Backend User Guide**](./docs/BACKEND_USER_GUIDE.md): Instructions on how to use and manage the system via its API after deployment, with example `curl` commands.
+*   [**Conceptual Frontend Design**](./docs/CONCEPTUAL_FRONTEND_DESIGN.md): A high-level outline for developing a custom frontend to interact with the backend API.
+
 ## References
 
 - [HUB Wiki](https://github.com/securade/hub/wiki)
