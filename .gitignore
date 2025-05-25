@@ -173,3 +173,9 @@ cython_debug/
 .streamlit
 process.pid
 debug_output/
+
+# Local data directories
+*_data/
+data/
+*.db
+*.sqlite3
